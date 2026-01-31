@@ -1,6 +1,6 @@
 # WireGuard VPN Toggle for Omarchy's Waybar
 
-A clean, automated installer for adding a WireGuard VPN toggle to Omarchy's Waybar status bar. Provides a convenient visual indicator and quick toggle for your WireGuard VPN connections.
+A clean, automated installer for adding a WireGuard VPN toggle to Omarchy's Waybar status bar. Provides a convenient visual indicator and quick toggle for your WireGuard VPN connections. Handles backup sources and some additional pain points in the original script from JacobusXIII/omarchy-wireguard-vpn-toggle
 
 Based on the guide from [Omarchy Discussion #1366](https://github.com/basecamp/omarchy/discussions/1366).
 
@@ -39,12 +39,12 @@ Install directly from GitHub with a single command:
 
 **Using curl:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JacobusXIII/omarchy-wireguard-vpn-toggle/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/StalkerSea/omarchy-wireguard-vpn-toggle/main/install.sh | bash
 ```
 
 **Using wget:**
 ```bash
-wget -qO- https://raw.githubusercontent.com/JacobusXIII/omarchy-wireguard-vpn-toggle/main/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/StalkerSea/omarchy-wireguard-vpn-toggle/main/install.sh | bash
 ```
 
 This will:
@@ -63,7 +63,7 @@ This will:
 #### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/JacobusXIII/omarchy-wireguard-vpn-toggle.git
+git clone https://github.com/StalkerSea/omarchy-wireguard-vpn-toggle.git
 cd omarchy-wireguard-vpn-toggle
 ```
 
