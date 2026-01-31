@@ -6,7 +6,7 @@ set -eEo pipefail
 # 
 # Can be used as:
 # 1. Local install: ./install.sh
-# 2. One-liner: curl -fsSL https://raw.githubusercontent.com/JacobusXIII/omarchy-wireguard-vpn-toggle/main/install.sh | bash
+# 2. One-liner: curl -fsSL https://raw.githubusercontent.com/StalkerSea/omarchy-wireguard-vpn-toggle/main/install.sh | bash
 
 # Colors for output
 RED='\033[0;31m'
@@ -17,8 +17,10 @@ NC='\033[0m'
 
 # GitHub configuration for one-liner mode
 GITHUB_SOURCES=(
-  "JacobusXIII/omarchy-wireguard-vpn-toggle"
+  # Primary, fixed source
   "StalkerSea/omarchy-wireguard-vpn-toggle"
+  # Backup source
+  "JacobusXIII/omarchy-wireguard-vpn-toggle"
 )
 
 GITHUB_BRANCH="main"
