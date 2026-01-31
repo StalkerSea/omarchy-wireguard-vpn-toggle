@@ -16,8 +16,11 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # GitHub configuration for one-liner mode
-GITHUB_USER="JacobusXIII"
-GITHUB_REPO="omarchy-wireguard-vpn-toggle"
+GITHUB_SOURCES=(
+  "JacobusXIII/omarchy-wireguard-vpn-toggle"
+  "StalkerSea/omarchy-wireguard-vpn-toggle"
+)
+
 GITHUB_BRANCH="main"
 
 # Runtime configuration
@@ -72,11 +75,23 @@ print_info() {
 
 # Check if scripts need to be downloaded (not running from repo)
 need_download() {
-  # Check if scripts directory exists
-  if [[ ! -d "${REPO_SCRIPTS_DIR}" ]]; then
-    return 0
-  fi
-  
+  local required_scripts=(
+    "vpn-status.sh"
+    "vpn-toggle.sh"
+    "vpn-select.sh"
+  )
+
+  # scripts directory must exist
+  [[ -d "${REPO_SCRIPTS_DIR}" ]] || return 0
+
+  # all required scripts must exist
+  for script in "${required_scripts[@]}"; do
+    if [[ ! -f "${REPO_SCRIPTS_DIR}/${script}" ]]; then
+      return 0
+    fi
+  done
+
+  # everything is present → no download needed
   return 1
 }
 
@@ -86,38 +101,44 @@ download_repository() {
   
   TEMP_INSTALL_DIR="/tmp/omarchy-wireguard-vpn-toggle-$$"
   
-  # Try git clone first
+  # Try git clone from primary + backups
   if command -v git &>/dev/null; then
-    if git clone --depth 1 --branch "${GITHUB_BRANCH}" \
-        "https://github.com/${GITHUB_USER}/${GITHUB_REPO}.git" \
-        "${TEMP_INSTALL_DIR}" &>/dev/null; then
-      print_success "Repository downloaded via git"
-      REPO_SCRIPTS_DIR="${TEMP_INSTALL_DIR}/scripts"
-      return 0
-    fi
+    for repo in "${GITHUB_SOURCES[@]}"; do
+      print_info "Trying git clone from ${repo}..."
+      if git clone --depth 1 --branch "${GITHUB_BRANCH}" \
+          "https://github.com/${repo}.git" \
+          "${TEMP_INSTALL_DIR}" &>/dev/null; then
+        print_success "Repository downloaded via git (${repo})"
+        REPO_SCRIPTS_DIR="${TEMP_INSTALL_DIR}/scripts"
+        return 0
+      fi
+    done
   fi
   
   # Fallback to tarball download
   print_info "Downloading repository tarball..."
-  local tarball_url="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/archive/refs/heads/${GITHUB_BRANCH}.tar.gz"
-  
   mkdir -p "${TEMP_INSTALL_DIR}"
   
-  if command -v curl &>/dev/null; then
-    if curl -fsSL "${tarball_url}" | tar -xz -C "${TEMP_INSTALL_DIR}" --strip-components=1 2>/dev/null; then
-      print_success "Repository downloaded via curl"
-      REPO_SCRIPTS_DIR="${TEMP_INSTALL_DIR}/scripts"
-      return 0
-    fi
-  elif command -v wget &>/dev/null; then
-    if wget -qO- "${tarball_url}" | tar -xz -C "${TEMP_INSTALL_DIR}" --strip-components=1 2>/dev/null; then
-      print_success "Repository downloaded via wget"
-      REPO_SCRIPTS_DIR="${TEMP_INSTALL_DIR}/scripts"
-      return 0
-    fi
-  fi
+  for repo in "${GITHUB_SOURCES[@]}"; do
+    local tarball_url="https://github.com/${repo}/archive/refs/heads/${GITHUB_BRANCH}.tar.gz"
+    print_info "Trying tarball from ${repo}..."
   
-  print_error "Failed to download repository"
+    if command -v curl &>/dev/null; then
+      if curl -fsSL "${tarball_url}" | tar -xz -C "${TEMP_INSTALL_DIR}" --strip-components=1 2>/dev/null; then
+        print_success "Repository downloaded via curl (${repo})"
+        REPO_SCRIPTS_DIR="${TEMP_INSTALL_DIR}/scripts"
+        return 0
+      fi
+    elif command -v wget &>/dev/null; then
+      if wget -qO- "${tarball_url}" | tar -xz -C "${TEMP_INSTALL_DIR}" --strip-components=1 2>/dev/null; then
+        print_success "Repository downloaded via wget (${repo})"
+        REPO_SCRIPTS_DIR="${TEMP_INSTALL_DIR}/scripts"
+        return 0
+      fi
+    fi
+  done
+  
+  print_error "Failed to download repository from all sources"
   print_error "Please install git, curl, or wget"
   exit 1
 }
@@ -130,7 +151,7 @@ main() {
 
   # Download repository if scripts not present
   if need_download; then
-    print_info "Running in one-liner mode"
+    print_info "Repository scripts not found locally, downloading..."
     download_repository
     echo ""
   fi
