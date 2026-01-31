@@ -172,6 +172,7 @@ main() {
   create_vpn_config
   update_waybar_config
   update_waybar_styles
+  ensure_vpn_icon_in_config
   configure_sudoers
   show_completion_message
   restart_waybar
@@ -323,56 +324,79 @@ update_waybar_config() {
   cp "${config_file}" "${backup_file}"
   print_success "Backed up existing config to ${backup_file}"
 
-  # Check if custom/vpn already exists
-  if jq -e '.["custom/vpn"]' "${config_file}" &>/dev/null; then
+  # Prepare a working JSON file (strip JSONC comments if necessary)
+  local work_tmp
+  work_tmp=$(mktemp)
+  local work_json="${work_tmp}.json"
+
+  # Try to parse original file; if it contains comments, strip them first
+  if jq '.' "${config_file}" > "${work_json}" 2>/dev/null; then
+    cp "${work_json}" "${work_json}.orig"
+  else
+    print_info "Waybar config appears to be JSONC or contains comments; attempting to strip comments"
+    if command -v perl &>/dev/null; then
+      perl -0777 -pe 's{/\*.*?\*/}{}gs' "${config_file}" | sed -E 's/\/\/.*$//' > "${work_tmp}"
+    else
+      sed -E 's/\/\/.*$//' "${config_file}" > "${work_tmp}"
+    fi
+
+    if ! jq '.' "${work_tmp}" > "${work_json}" 2>/dev/null; then
+      rm -f "${work_tmp}" "${work_json}" 2>/dev/null || true
+      print_warning "Failed to parse Waybar config after stripping comments. Leaving original file intact."
+      return 1
+    fi
+  fi
+
+  # If custom/vpn already exists in the working JSON, nothing more to do
+  if jq -e '."custom/vpn"' "${work_json}" &>/dev/null && jq -e '."modules-right" | index("custom/vpn")' "${work_json}" &>/dev/null; then
     print_info "custom/vpn already present in Waybar config"
+    rm -f "${work_tmp}" "${work_json}" 2>/dev/null || true
     return 0
   fi
 
-  # Add custom/vpn to modules-right after network
-  if jq -e '.["modules-right"]' "${config_file}" &>/dev/null; then
-    # Find network and insert custom/vpn right after it, preserving order
-    jq '.["modules-right"] = (
-      .["modules-right"] | 
-      to_entries | 
+  # Add custom/vpn to modules-right after network if modules-right exists
+  if jq -e '."modules-right"' "${work_json}" &>/dev/null; then
+    jq '."modules-right" = (
+      ."modules-right" |
+      to_entries |
       map(
-        if .value == "network" then 
+        if .value == "network" then
           [., {"key": (.key + 0.5), "value": "custom/vpn"}]
-        else 
+        else
           .
         end
-      ) | 
-      flatten | 
-      sort_by(.key) | 
+      ) |
+      flatten |
+      sort_by(.key) |
       map(.value)
-    )' "${config_file}" > "${config_file}.tmp"
-    mv "${config_file}.tmp" "${config_file}"
-    print_success "Added custom/vpn to modules-right after network"
+    )' "${work_json}" > "${work_json}.tmp" && mv "${work_json}.tmp" "${work_json}"
+    print_success "Ensured custom/vpn present in modules-right (after network if present)"
   else
-    print_warning "Could not find modules-right in config"
+    print_warning "Could not find modules-right in config; adding modules-right with custom/vpn"
+    jq '. + {"modules-right": ["network", "custom/vpn"]}' "${work_json}" > "${work_json}.tmp" && mv "${work_json}.tmp" "${work_json}"
   fi
 
-  # Add custom/vpn module definition
-  jq '. += {
-    "custom/vpn": {
-      "format": "{icon}",
-      "format-icons": {
-        "default": "",
-        "none": "󰻌",
-        "connected": "󰦝",
-        "disconnected": "󰦞"
-      },
-      "interval": 3,
-      "return-type": "json",
-      "exec": "$HOME/.config/waybar/scripts/vpn-status.sh",
-      "on-click": "$HOME/.config/waybar/scripts/vpn-toggle.sh",
-      "on-click-right": "omarchy-launch-floating-terminal-with-presentation $HOME/.config/waybar/scripts/vpn-select.sh",
-      "signal": 8
-    }
-  }' "${config_file}" > "${config_file}.tmp"
-  
-  mv "${config_file}.tmp" "${config_file}"
-  print_success "Added custom/vpn module definition"
+  # Add or replace custom/vpn module definition inside the main object
+  jq '."custom/vpn" = {
+    "format": "{icon}",
+    "format-icons": {
+      "default": "",
+      "none": "󰻌",
+      "connected": "󰦝",
+      "disconnected": "󰦞"
+    },
+    "interval": 3,
+    "return-type": "json",
+    "exec": "$HOME/.config/waybar/scripts/vpn-status.sh",
+    "on-click": "$HOME/.config/waybar/scripts/vpn-toggle.sh",
+    "on-click-right": "omarchy-launch-floating-terminal-with-presentation $HOME/.config/waybar/scripts/vpn-select.sh",
+    "signal": 8
+  }' "${work_json}" > "${work_json}.tmp" && mv "${work_json}.tmp" "${work_json}"
+
+  # Write the modified JSON back to the original config (original was backed up earlier)
+  mv "${work_json}" "${config_file}"
+  rm -f "${work_tmp}" 2>/dev/null || true
+  print_success "Added/updated custom/vpn module definition inside Waybar config"
 }
 
 update_waybar_styles() {
@@ -397,6 +421,126 @@ update_waybar_styles() {
   else
     print_warning "style.css not found at ${style_file}"
   fi
+}
+
+
+# Validate and attempt to repair Waybar config.jsonc if the VPN icon is missing
+ensure_vpn_icon_in_config() {
+  print_info "Verifying VPN icon is present in Waybar config..."
+
+  local config_file="${WAYBAR_CONFIG_DIR}/config.jsonc"
+  if [[ ! -f "${config_file}" ]]; then
+    config_file="${WAYBAR_CONFIG_DIR}/config"
+  fi
+
+  if [[ ! -f "${config_file}" ]]; then
+    print_warning "No Waybar config found to validate (${config_file})"
+    return 0
+  fi
+
+  # Helper: test presence of custom/vpn module and modules-right entry
+  local has_module=1
+  if jq -e '."custom/vpn"' "${config_file}" &>/dev/null && jq -e '."modules-right" | index("custom/vpn")' "${config_file}" &>/dev/null; then
+    print_success "custom/vpn present in Waybar config"
+    return 0
+  else
+    print_warning "custom/vpn not detected in Waybar config"
+  fi
+
+  # Attempt automated fix: strip JSONC comments and revalidate
+  if try_auto_fix_config "${config_file}"; then
+    print_success "Repaired Waybar config"
+    # Ensure the module is inserted after repair
+    update_waybar_config
+    return 0
+  fi
+
+  # If auto repair failed, attempt to download canonical Omarchy config as fallback
+  print_warning "Automated repair failed; attempting to download canonical Omarchy Waybar config as fallback"
+  local raw_url="https://raw.githubusercontent.com/basecamp/omarchy/dev/config/waybar/config.jsonc"
+  local tmp
+  tmp=$(mktemp)
+
+  if command -v curl &>/dev/null; then
+    if ! curl -fsSL "${raw_url}" -o "${tmp}"; then
+      print_error "Failed to download fallback config from ${raw_url}"
+      rm -f "${tmp}"
+      return 1
+    fi
+  elif command -v wget &>/dev/null; then
+    if ! wget -qO "${tmp}" "${raw_url}"; then
+      print_error "Failed to download fallback config from ${raw_url}"
+      rm -f "${tmp}"
+      return 1
+    fi
+  else
+    print_error "Neither curl nor wget available to download fallback config"
+    rm -f "${tmp}"
+    return 1
+  fi
+
+  # Validate downloaded content
+  if ! jq '.' "${tmp}" > /dev/null 2>&1; then
+    print_error "Downloaded fallback config is not valid JSON/JSONC"
+    rm -f "${tmp}"
+    return 1
+  fi
+
+  # Backup original and replace with downloaded fallback (formatted)
+  local backup_file="${config_file}.backup.download_fallback.$(date +%Y%m%d-%H%M%S)"
+  cp "${config_file}" "${backup_file}" || true
+  jq '.' "${tmp}" > "${config_file}.tmp" && mv "${config_file}.tmp" "${config_file}"
+  rm -f "${tmp}"
+  print_success "Replaced Waybar config with canonical Omarchy fallback (backup saved to ${backup_file})"
+
+  # Ensure custom/vpn is added
+  update_waybar_config
+  return 0
+}
+
+
+# Try to strip JSONC comments and repair invalid JSON.
+try_auto_fix_config() {
+  local src="$1"
+  local tmp
+  tmp=$(mktemp)
+
+  print_info "Attempting automated repair of ${src} (stripping comments, validating JSON)"
+
+  # Remove /* ... */ block comments then remove // line comments
+  if command -v perl &>/dev/null; then
+    perl -0777 -pe 's{/\*.*?\*/}{}gs' "${src}" | sed -E 's/\/\/.*$//' > "${tmp}"
+  else
+    # Fallback: remove // comments only
+    sed -E 's/\/\/.*$//' "${src}" > "${tmp}"
+  fi
+
+  # Validate with jq and pretty-print
+  if jq '.' "${tmp}" > "${tmp}.json" 2>/dev/null; then
+    local backup_file="${src}.backup.$(date +%Y%m%d-%H%M%S)"
+    cp "${src}" "${backup_file}"
+    mv "${tmp}.json" "${src}"
+    rm -f "${tmp}"
+    print_success "Repaired ${src} and backed up original to ${backup_file}"
+    return 0
+  else
+    rm -f "${tmp}" "${tmp}.json" 2>/dev/null || true
+    print_warning "Automated JSON repair failed for ${src}"
+    return 1
+  fi
+}
+
+
+# Write a minimal valid Waybar config to the given path
+create_minimal_waybar_config() {
+  local dest="$1"
+  cat > "${dest}" <<'EOF'
+{
+  "modules-left": [],
+  "modules-center": [],
+  "modules-right": ["network", "custom/vpn"]
+}
+EOF
 }
 
 configure_sudoers() {
