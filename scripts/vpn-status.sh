@@ -5,7 +5,7 @@ set -eEo pipefail
 output_status() {
   local status=$1
   local tooltip=$2
-  echo "{\"text\":\"\",\"alt\":\"${status}\",\"class\":\"${status}\",\"tooltip\":\"${tooltip}\"}"
+  echo "{\"icon\":\"${status}\",\"text\":\"\",\"alt\":\"${status}\",\"class\":\"${status}\",\"tooltip\":\"${tooltip}\"}"
 }
 
 # Source VPN configuration

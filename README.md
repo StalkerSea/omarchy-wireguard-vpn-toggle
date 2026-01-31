@@ -31,6 +31,21 @@ Since Omarchy is designed for Arch Linux:
 sudo pacman -S wireguard-tools waybar jq
 ```
 
+### DNS helper (resolvconf / openresolv)
+
+`wg-quick` may call a "resolvconf" helper to manage DNS when bringing interfaces up. If that helper is missing, `wg-quick up` can fail (resolvconf: command not found) and the VPN will not stay up. Install a resolvconf implementation for your distribution if you see such errors.
+
+```bash
+sudo pacman -S openresolv
+```
+
+Alternative: if your system uses `systemd-resolved`, `wg-quick` can be adapted to use `resolvectl` instead of `resolvconf` — either install `openresolv` or adjust your WireGuard config accordingly.
+
+Quick check:
+```bash
+command -v resolvconf || command -v resolvectl || echo "No resolvconf/resolvectl found"
+```
+
 ## Installation
 
 ### Quick Install (One-Liner)
