@@ -33,6 +33,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "/t
 REPO_SCRIPTS_DIR="${SCRIPT_DIR}/scripts"
 TEMP_INSTALL_DIR=""
 
+# Track changes for possible revert (SIGINT or uninstall)
+declare -a VW_BACKUPS=()
+declare -a VW_INSTALLED_SCRIPTS=()
+
+# Record a backup path for later revert
+record_backup() {
+  VW_BACKUPS+=("$1")
+}
+
+# Record an installed script path
+record_installed_script() {
+  VW_INSTALLED_SCRIPTS+=("$1")
+}
+
 # Error handling
 catch_errors() {
   local exit_code=$?
@@ -46,6 +60,38 @@ catch_errors() {
   return "${exit_code}"
 }
 
+# Revert backups recorded in VW_BACKUPS
+revert_backups() {
+  for b in "${VW_BACKUPS[@]:-}"; do
+    if [[ -f "${b}" ]]; then
+      # original path is backup prefix before .backup.
+      orig="${b%%.backup.*}"
+      if [[ -n "${orig}" ]]; then
+        cp "${b}" "${orig}" && print_info "Restored ${orig} from ${b}"
+      fi
+    fi
+  done
+}
+
+# Remove any installed scripts recorded in VW_INSTALLED_SCRIPTS
+revert_installed_scripts() {
+  for s in "${VW_INSTALLED_SCRIPTS[@]:-}"; do
+    if [[ -f "${s}" ]]; then
+      rm -f "${s}" && print_info "Removed installed script ${s}"
+    fi
+  done
+}
+
+# Handler for SIGINT (Ctrl+C) to revert partial changes and exit
+on_sigint() {
+  echo
+  print_warning "Interrupted — reverting changes made so far..."
+  revert_backups
+  revert_installed_scripts
+  print_warning "Revert complete. Exiting."
+  exit 130
+}
+
 exit_handler() {
   local exit_code=$?
   # Clean up temp directory if it exists and installation was successful
@@ -55,8 +101,10 @@ exit_handler() {
   exit "${exit_code}"
 }
 
-trap catch_errors ERR INT TERM
-trap exit_handler EXIT
+trap 'catch_errors' ERR
+trap 'on_sigint' INT
+trap 'catch_errors' TERM
+trap 'exit_handler' EXIT
 
 # Print functions
 print_success() {
@@ -268,8 +316,17 @@ install_scripts() {
   
   for script in "${scripts[@]}"; do
     if [[ -f "${REPO_SCRIPTS_DIR}/${script}" ]]; then
+      # backup existing script if present
+      if [[ -f "${SCRIPTS_DIR}/${script}" ]]; then
+        local sbackup="${SCRIPTS_DIR}/${script}.backup.$(date +%Y%m%d-%H%M%S)"
+        cp "${SCRIPTS_DIR}/${script}" "${sbackup}"
+        record_backup "${sbackup}"
+        print_info "Backed up existing ${script} to ${sbackup}"
+      fi
+
       cp "${REPO_SCRIPTS_DIR}/${script}" "${SCRIPTS_DIR}/"
       chmod +x "${SCRIPTS_DIR}/${script}"
+      record_installed_script "${SCRIPTS_DIR}/${script}"
       print_success "Installed ${script}"
     else
       print_error "Script not found: ${REPO_SCRIPTS_DIR}/${script}"
@@ -322,6 +379,7 @@ update_waybar_config() {
   # Backup
   local backup_file="${config_file}.backup.$(date +%Y%m%d-%H%M%S)"
   cp "${config_file}" "${backup_file}"
+  record_backup "${backup_file}"
   print_success "Backed up existing config to ${backup_file}"
 
   # Prepare a working JSON file (strip JSONC comments if necessary)
@@ -407,6 +465,7 @@ update_waybar_styles() {
   if [[ -f "${style_file}" ]]; then
     local backup_file="${style_file}.backup.$(date +%Y%m%d-%H%M%S)"
     cp "${style_file}" "${backup_file}"
+    record_backup "${backup_file}"
     print_success "Backed up existing style to ${backup_file}"
     
     # Add #custom-vpn alongside #custom-omarchy
@@ -489,6 +548,7 @@ ensure_vpn_icon_in_config() {
   # Backup original and replace with downloaded fallback (formatted)
   local backup_file="${config_file}.backup.download_fallback.$(date +%Y%m%d-%H%M%S)"
   cp "${config_file}" "${backup_file}" || true
+  record_backup "${backup_file}"
   jq '.' "${tmp}" > "${config_file}.tmp" && mv "${config_file}.tmp" "${config_file}"
   rm -f "${tmp}"
   print_success "Replaced Waybar config with canonical Omarchy fallback (backup saved to ${backup_file})"
@@ -519,6 +579,7 @@ try_auto_fix_config() {
   if jq '.' "${tmp}" > "${tmp}.json" 2>/dev/null; then
     local backup_file="${src}.backup.$(date +%Y%m%d-%H%M%S)"
     cp "${src}" "${backup_file}"
+    record_backup "${backup_file}"
     mv "${tmp}.json" "${src}"
     rm -f "${tmp}"
     print_success "Repaired ${src} and backed up original to ${backup_file}"
@@ -628,6 +689,110 @@ restart_waybar() {
   waybar &>/dev/null &
   print_success "Waybar restarted"
 }
+
+
+# Restore backups for given patterns
+find_most_recent_backup() {
+  local dir="$1"
+  local patterns=("$2")
+  for p in "${patterns[@]}"; do
+    local found
+    found=$(ls -1t ${dir}/${p} 2>/dev/null | head -n1 || true)
+    if [[ -n "${found}" ]]; then
+      echo "${found}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+uninstall_flow() {
+  echo ""
+  print_warning "Uninstall / Revert changes"
+  echo "This will attempt to revert Waybar config and styles and remove installed scripts."
+  read -p "Continue? (y/N) " -n 1 -r </dev/tty
+  echo
+  if [[ ! ${REPLY} =~ ^[Yy]$ ]]; then
+    print_info "Aborting uninstall"
+    return 0
+  fi
+
+  # Restore Waybar config from most recent backup
+  local cfg_backup
+  cfg_backup=$(ls -1t "${WAYBAR_CONFIG_DIR}/config.jsonc.backup."* 2>/dev/null | head -n1 || true)
+  if [[ -z "${cfg_backup}" ]]; then
+    cfg_backup=$(ls -1t "${WAYBAR_CONFIG_DIR}/config.backup."* 2>/dev/null | head -n1 || true)
+  fi
+
+  if [[ -n "${cfg_backup}" ]]; then
+    local orig_cfg="${cfg_backup%%.backup.*}"
+    cp "${cfg_backup}" "${orig_cfg}"
+    print_success "Restored Waybar config from ${cfg_backup} -> ${orig_cfg}"
+  else
+    print_warning "No Waybar config backup found."
+    read -p "Download canonical Omarchy Waybar config as fallback? (y/N) " -n 1 -r </dev/tty
+    echo
+    if [[ ${REPLY} =~ ^[Yy]$ ]]; then
+      local raw_url="https://raw.githubusercontent.com/basecamp/omarchy/dev/config/waybar/config.jsonc"
+      if command -v curl &>/dev/null; then
+        curl -fsSL "${raw_url}" -o "${WAYBAR_CONFIG_DIR}/config.jsonc" && print_success "Downloaded fallback Waybar config"
+      elif command -v wget &>/dev/null; then
+        wget -qO "${WAYBAR_CONFIG_DIR}/config.jsonc" "${raw_url}" && print_success "Downloaded fallback Waybar config"
+      else
+        print_error "Neither curl nor wget available to download fallback config"
+      fi
+    fi
+  fi
+
+  # Restore style.css if backup exists
+  local style_backup
+  style_backup=$(ls -1t "${WAYBAR_CONFIG_DIR}/style.css.backup."* 2>/dev/null | head -n1 || true)
+  if [[ -n "${style_backup}" ]]; then
+    local orig_style="${style_backup%%.backup.*}"
+    cp "${style_backup}" "${orig_style}"
+    print_success "Restored style from ${style_backup} -> ${orig_style}"
+  else
+    # try to remove inserted #custom-vpn alongside #custom-omarchy
+    local style_file="${WAYBAR_CONFIG_DIR}/style.css"
+    if [[ -f "${style_file}" ]]; then
+      if grep -q "#custom-omarchy,\n#custom-vpn" "${style_file}"; then
+        sed -i 's/#custom-omarchy,\n#custom-vpn/#custom-omarchy/g' "${style_file}"
+        print_success "Removed #custom-vpn from style.css"
+      else
+        print_info "No style backup found and no automatic removal needed."
+      fi
+    else
+      print_info "No style.css present to modify."
+    fi
+  fi
+
+  # Remove installed scripts
+  for s in vpn-status.sh vpn-toggle.sh vpn-select.sh vpn.conf; do
+    local path="${SCRIPTS_DIR}/${s}"
+    if [[ -f "${path}" ]]; then
+      rm -f "${path}" && print_success "Removed ${path}"
+    fi
+  done
+
+  # Remove sudoers file if present
+  if [[ -f "/etc/sudoers.d/wireguard-vpn-toggle" ]]; then
+    read -p "Remove sudoers rule /etc/sudoers.d/wireguard-vpn-toggle? (y/N) " -n 1 -r </dev/tty
+    echo
+    if [[ ${REPLY} =~ ^[Yy]$ ]]; then
+      sudo rm -f /etc/sudoers.d/wireguard-vpn-toggle && print_success "Removed sudoers rule"
+    else
+      print_info "Left sudoers rule in place"
+    fi
+  fi
+
+  print_success "Uninstall/revert complete"
+}
+
+# If run with --remove or --uninstall, perform uninstall flow
+if [[ "$1" == "--remove" || "$1" == "--uninstall" ]]; then
+  uninstall_flow
+  exit 0
+fi
 
 # Run main function
 main "$@"
