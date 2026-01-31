@@ -278,19 +278,29 @@ install_scripts() {
 }
 
 create_vpn_config() {
-  if [[ ! -f "${SCRIPTS_DIR}/vpn.conf" ]]; then
-    local first_config
-    first_config=$(find "${VPN_CONFIGS_PATH}" -maxdepth 1 -name "*.conf" 2>/dev/null | head -n 1 | xargs -n 1 basename -s .conf 2>/dev/null || echo "")
-    
-    if [[ -n "${first_config}" ]]; then
-      echo "VPN_NAME=\"${first_config}\"" > "${SCRIPTS_DIR}/vpn.conf"
-      print_success "Created vpn.conf with default: ${first_config}"
+  local config_file="${SCRIPTS_DIR}/vpn.conf"
+
+  # Always ensure the scripts directory exists
+  mkdir -p "${SCRIPTS_DIR}"
+
+  if [[ ! -f "${config_file}" ]]; then
+    # Detect all available VPN configs
+    mapfile -t VPN_CONFIGS < <(sudo find "${VPN_CONFIGS_PATH}" -maxdepth 1 -name "*.conf" 2>/dev/null | xargs -n 1 basename -s .conf 2>/dev/null | sort)
+
+    if [[ ${#VPN_CONFIGS[@]} -gt 0 ]]; then
+      # Use the first VPN config as default
+      echo "VPN_NAME=\"${VPN_CONFIGS[0]}\"" > "${config_file}"
+      print_success "Created vpn.conf with default VPN: ${VPN_CONFIGS[0]}"
+      print_info "You can change it later with vpn-select.sh"
     else
-      echo "VPN_NAME=\"wg0\"" > "${SCRIPTS_DIR}/vpn.conf"
-      print_warning "Created vpn.conf with placeholder. Update it with your VPN config name."
+      # No VPN configs found, create placeholder
+      echo "VPN_NAME=\"wg0\"" > "${config_file}"
+      print_warning "No WireGuard configs found. Created vpn.conf with placeholder 'wg0'"
+      print_info "Add your configs to ${VPN_CONFIGS_PATH} and use vpn-select.sh to choose one"
     fi
   else
-    print_info "vpn.conf already exists, skipping..."
+    # vpn.conf exists, leave it intact for vpn-select.sh
+    print_info "vpn.conf already exists, leaving it for vpn-select.sh to manage"
   fi
 }
 
