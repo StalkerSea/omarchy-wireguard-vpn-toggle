@@ -305,61 +305,70 @@ update_waybar_config() {
     return 0
   fi
 
+  # Backup
   local backup_file="${config_file}.backup.$(date +%Y%m%d-%H%M%S)"
   cp "${config_file}" "${backup_file}"
   print_success "Backed up existing config to ${backup_file}"
 
   # Check if custom/vpn already exists
-  if jq -e '.["custom/vpn"]' "${config_file}" &>/dev/null; then
+  if grep -q '"custom/vpn"' "${config_file}"; then
     print_info "custom/vpn already present in Waybar config"
     return 0
   fi
 
-  # Add custom/vpn to modules-right after network
-  if jq -e '.["modules-right"]' "${config_file}" &>/dev/null; then
-    # Find network and insert custom/vpn right after it, preserving order
-    jq '.["modules-right"] = (
-      .["modules-right"] | 
-      to_entries | 
-      map(
-        if .value == "network" then 
-          [., {"key": (.key + 0.5), "value": "custom/vpn"}]
-        else 
-          .
-        end
-      ) | 
-      flatten | 
-      sort_by(.key) | 
-      map(.value)
-    )' "${config_file}" > "${config_file}.tmp"
+  # Try to add to modules-right
+  if grep -q '"modules-right"' "${config_file}"; then
+    print_info "Adding custom/vpn to modules-right"
+
+    # Insert after "network" if it exists, else append at the end of the array
+    awk '
+      BEGIN { added=0 }
+      /"modules-right"/ {
+        print; getline
+        print
+        while (match($0, /"network"/)) {
+          print
+          print "    ,\"custom/vpn\""
+          added=1
+          next
+        }
+        if (!added) {
+          sub(/\]/,",\"custom/vpn\"]")
+        }
+        next
+      }
+      { print }
+    ' "${config_file}" > "${config_file}.tmp"
     mv "${config_file}.tmp" "${config_file}"
-    print_success "Added custom/vpn to modules-right after network"
+    print_success "Inserted custom/vpn in modules-right"
   else
-    print_warning "Could not find modules-right in config"
+    print_warning "modules-right not found; custom/vpn will need manual placement"
   fi
 
-  # Add custom/vpn module definition
-  jq '. += {
-    "custom/vpn": {
-      "format": "{icon}",
-      "format-icons": {
-        "default": "",
-        "none": "󰻌",
-        "connected": "󰦝",
-        "disconnected": "󰦞"
-      },
-      "interval": 3,
-      "return-type": "json",
-      "exec": "$HOME/.config/waybar/scripts/vpn-status.sh",
-      "on-click": "$HOME/.config/waybar/scripts/vpn-toggle.sh",
-      "on-click-right": "omarchy-launch-floating-terminal-with-presentation $HOME/.config/waybar/scripts/vpn-select.sh",
-      "signal": 8
-    }
-  }' "${config_file}" > "${config_file}.tmp"
-  
-  mv "${config_file}.tmp" "${config_file}"
-  print_success "Added custom/vpn module definition"
+  # Add custom/vpn module definition at the end of the file
+  cat >> "${config_file}" <<'EOF'
+
+/* Added by VPN toggle installer */
+"custom/vpn": {
+  "format": "{icon}",
+  "format-icons": {
+    "default": "",
+    "none": "󰻌",
+    "connected": "󰦝",
+    "disconnected": "󰦞"
+  },
+  "interval": 3,
+  "return-type": "json",
+  "exec": "$HOME/.config/waybar/scripts/vpn-status.sh",
+  "on-click": "$HOME/.config/waybar/scripts/vpn-toggle.sh",
+  "on-click-right": "omarchy-launch-floating-terminal-with-presentation $HOME/.config/waybar/scripts/vpn-select.sh",
+  "signal": 8
 }
+EOF
+
+  print_success "Added custom/vpn module definition to Waybar config"
+}
+
 
 update_waybar_styles() {
   print_info "Updating Waybar styles..."
